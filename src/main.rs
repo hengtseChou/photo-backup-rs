@@ -1,11 +1,47 @@
+use chrono::{Datelike, NaiveDateTime};
 use clap::{Arg, ArgAction, Command};
 use std::collections::HashSet;
+use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
-use std::time::{UNIX_EPOCH};
-use chrono::{Datelike, NaiveDateTime};
+use std::time::UNIX_EPOCH;
+
+/// Embedded rsync binary
+const RSYNC_BINARY: &[u8] = include_bytes!("../rsync");
+
+/// Extracts the embedded rsync binary to a temporary location and returns its path
+fn extract_rsync_binary() -> String {
+    let temp_path = env::temp_dir().join("rsync-from-photo-backup-rs");
+    fs::write(&temp_path, RSYNC_BINARY).expect("Failed to write embedded rsync binary");
+
+    // Correct way to set file permissions
+    let metadata = fs::metadata(&temp_path).expect("Failed to read metadata");
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o755); // Set executable permissions
+    fs::set_permissions(&temp_path, permissions).expect("Failed to set permissions");
+
+    temp_path.to_string_lossy().to_string()
+}
+
+/// Runs rsync command
+fn run_rsync(src: &str, dest: &str, rsync_path: &str) {
+    let output = ProcessCommand::new(rsync_path)
+        .arg("-avz")
+        .arg(src)
+        .arg(dest)
+        .output()
+        .expect("Failed to execute rsync");
+
+    if !output.status.success() {
+        eprintln!(
+            "[ERROR] Rsync failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
 
 /// Recursively calculates the total size of a directory
 fn calculate_dir_size(dir: &Path) -> u64 {
@@ -39,46 +75,52 @@ fn format_size(bytes: u64) -> String {
     format!("{:.2} {}", size, sizes[index])
 }
 
-
 fn main() {
     let matches = Command::new("photo-backup-rs")
         .version("0.1.0")
         .about("Syncs iPhone photos and organizes them into year-month folders")
-        .arg(Arg::new("source")
-            .short('s')
-            .long("source")
-            .required(true)
-            .num_args(1)  // <-- Fix here
-            .help("Specify the source directory"))
-        .arg(Arg::new("destination")
-            .short('d')
-            .long("dest")
-            .required(true)
-            .num_args(1)  // <-- Fix here
-            .help("Specify the destination directory"))
-        .arg(Arg::new("less_output")
-            .short('l')
-            .long("less")
-            .action(ArgAction::SetTrue)
-            .help("Show less output"))
+        .arg(
+            Arg::new("source")
+                .short('s')
+                .long("source")
+                .required(true)
+                .num_args(1)
+                .help("Specify the source directory"),
+        )
+        .arg(
+            Arg::new("destination")
+                .short('d')
+                .long("dest")
+                .required(true)
+                .num_args(1)
+                .help("Specify the destination directory"),
+        )
+        .arg(
+            Arg::new("less_output")
+                .short('l')
+                .long("less")
+                .action(ArgAction::SetTrue)
+                .help("Show less output"),
+        )
         .get_matches();
 
-
-    
     let source_dir = matches.get_one::<String>("source").unwrap();
     let dest_dir = matches.get_one::<String>("destination").unwrap();
     let less_output = matches.get_flag("less_output");
-
 
     if !Path::new(source_dir).is_dir() {
         eprintln!("[ERROR] Source directory '{}' does not exist", source_dir);
         std::process::exit(1);
     }
     if !Path::new(dest_dir).is_dir() {
-        eprintln!("[ERROR] Destination directory '{}' does not exist", dest_dir);
+        eprintln!(
+            "[ERROR] Destination directory '{}' does not exist",
+            dest_dir
+        );
         std::process::exit(1);
     }
 
+    let rsync_path = extract_rsync_binary();
     let record_path = format!("{}/.processed_subfolders", dest_dir);
     let mut processed_subfolders = HashSet::new();
 
@@ -102,7 +144,7 @@ fn main() {
 
     for folder in &folders {
         let subfolder_name = folder.file_name().unwrap().to_string_lossy().to_string();
-        
+
         if processed_subfolders.contains(&subfolder_name) {
             if !less_output {
                 println!("--> Skipping fully processed subfolder: {}", subfolder_name);
@@ -118,16 +160,31 @@ fn main() {
 
         for (i, file) in files.iter().enumerate() {
             let metadata = file.metadata().unwrap();
-            let modified = metadata.modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let modified = metadata
+                .modified()
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             let datetime = NaiveDateTime::from_timestamp_opt(modified as i64, 0).unwrap();
-            let year_month = format!("{}/{:04}-{:02}", dest_dir, datetime.year(), datetime.month());
+            let year_month = format!(
+                "{}/{:04}-{:02}",
+                dest_dir,
+                datetime.year(),
+                datetime.month()
+            );
             fs::create_dir_all(&year_month).unwrap();
 
             let file_path = file.path();
             if !less_output {
-                print!("\r--> Processing {}: file {}/{}", subfolder_name, i + 1, files.len());
+                print!(
+                    "\r--> Processing {}: file {}/{}",
+                    subfolder_name,
+                    i + 1,
+                    files.len()
+                );
             }
-            run_rsync(file_path.to_str().unwrap(), &year_month);
+            run_rsync(file_path.to_str().unwrap(), &year_month, &rsync_path);
         }
 
         println!("\n--> {} completed 🚀", subfolder_name);
