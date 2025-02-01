@@ -77,7 +77,7 @@ fn format_size(bytes: u64) -> String {
 
 fn main() {
     let matches = Command::new("photo-backup-rs")
-        .version("0.1.0")
+        .version("0.1.1")
         .about("Syncs iPhone photos and organizes them into year-month folders")
         .arg(
             Arg::new("source")
