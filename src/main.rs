@@ -10,7 +10,7 @@ use std::process::Command as ProcessCommand;
 use std::time::UNIX_EPOCH;
 
 /// Embedded rsync binary
-const RSYNC_BINARY: &[u8] = include_bytes!("../rsync");
+const RSYNC_BINARY: &[u8] = include_bytes!("../bin/rsync");
 
 /// Extracts the embedded rsync binary to a temporary location and returns its path
 fn extract_rsync_binary() -> String {
